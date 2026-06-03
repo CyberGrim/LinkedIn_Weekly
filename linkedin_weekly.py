@@ -14,6 +14,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 import datetime
 import subprocess
+import time
 import requests
 import feedparser
 from pathlib import Path
@@ -36,7 +37,15 @@ REDDIT_SUBREDDITS = [
 GAMASUTRA_RSS_URL = "https://www.gamedeveloper.com/rss.xml"
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 NUM_DRAFTS = 3
-REDDIT_HEADERS = {"User-Agent": "LinkedInWeeklyBot/1.0 (personal-use-only)"}
+REDDIT_USER_AGENT = os.getenv(
+    "REDDIT_USER_AGENT",
+    "python:linkedin-weekly:1.0 (personal weekly digest script)",
+)
+HTTP_HEADERS = {
+    "User-Agent": REDDIT_USER_AGENT,
+    "Accept": "application/atom+xml,application/rss+xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 HN_KEYWORDS = [
     "game", "gaming", "dev", "developer", "programming", "software",
@@ -47,63 +56,77 @@ HN_KEYWORDS = [
 
 # ── Fetchers ──────────────────────────────────────────────────────────────────
 
+def _strip_html(text: str) -> str:
+    return re.sub(r"<[^>]+>", "", text).strip()[:300]
+
+
 def fetch_reddit_posts(subreddits: list[str], limit: int = 20) -> list[dict]:
-    """Fetch top posts from the past week from given subreddits."""
+    """Fetch top posts from the past week via Reddit RSS (JSON endpoints often 403)."""
     posts = []
     for sub in subreddits:
-        try:
-            url = f"https://www.reddit.com/r/{sub}/top.json?t=week&limit={limit}"
-            resp = requests.get(url, headers=REDDIT_HEADERS, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            for item in data["data"]["children"]:
-                p = item["data"]
-                posts.append({
-                    "source": f"r/{sub}",
-                    "title": p["title"],
-                    "score": p["score"],
-                    "comments": p["num_comments"],
-                    "url": f"https://reddit.com{p['permalink']}",
-                    "snippet": p.get("selftext", "")[:300].strip(),
-                })
-            print(f"    ✓ r/{sub} — {len(data['data']['children'])} posts")
-        except Exception as exc:
-            print(f"    ⚠  r/{sub} failed: {exc}")
+        rss_urls = [
+            f"https://www.reddit.com/r/{sub}/top/.rss?t=week&limit={limit}",
+            f"https://old.reddit.com/r/{sub}/top/.rss?t=week&limit={limit}",
+        ]
+        fetched = False
+        for url in rss_urls:
+            try:
+                feed = feedparser.parse(url, request_headers=HTTP_HEADERS)
+                if getattr(feed, "status", None) == 403 or not feed.entries:
+                    continue
+                entries = feed.entries[:limit]
+                for i, entry in enumerate(entries):
+                    rank = limit - i
+                    snippet = ""
+                    if entry.get("content"):
+                        snippet = _strip_html(entry.content[0].get("value", ""))
+                    elif entry.get("summary"):
+                        snippet = _strip_html(entry.summary)
+                    posts.append({
+                        "source": f"r/{sub}",
+                        "title": entry.get("title", ""),
+                        "score": rank * 100,
+                        "comments": 0,
+                        "url": entry.get("link", ""),
+                        "snippet": snippet,
+                    })
+                print(f"    ✓ r/{sub} — {len(entries)} posts (RSS)")
+                fetched = True
+                break
+            except Exception:
+                continue
+        if not fetched:
+            print(f"    ⚠  r/{sub} failed: Reddit RSS blocked or unavailable")
+        time.sleep(0.5)
     return posts
 
 
 def fetch_hackernews_posts(limit: int = 15) -> list[dict]:
-    """Fetch top HN stories relevant to game dev / programming."""
+    """Fetch top HN stories relevant to game dev / programming (Algolia API)."""
     posts = []
     try:
-        top_ids = requests.get(
-            "https://hacker-news.firebaseio.com/v0/topstories.json",
-            timeout=10,
-        ).json()[:150]
-
-        count = 0
-        for story_id in top_ids:
-            if count >= limit:
-                break
-            try:
-                story = requests.get(
-                    f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json",
-                    timeout=5,
-                ).json()
-                if story and story.get("type") == "story":
-                    title = story.get("title", "").lower()
-                    if any(kw in title for kw in HN_KEYWORDS):
-                        posts.append({
-                            "source": "Hacker News",
-                            "title": story.get("title", ""),
-                            "score": story.get("score", 0),
-                            "comments": story.get("descendants", 0),
-                            "url": story.get("url") or f"https://news.ycombinator.com/item?id={story_id}",
-                            "snippet": "",
-                        })
-                        count += 1
-            except Exception:
+        resp = requests.get(
+            "https://hn.algolia.com/api/v1/search",
+            params={"tags": "front_page", "hitsPerPage": 100},
+            headers=HTTP_HEADERS,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        for hit in resp.json().get("hits", []):
+            title = hit.get("title") or ""
+            if not any(kw in title.lower() for kw in HN_KEYWORDS):
                 continue
+            story_id = hit.get("story_id") or hit.get("objectID")
+            posts.append({
+                "source": "Hacker News",
+                "title": title,
+                "score": hit.get("points") or 0,
+                "comments": hit.get("num_comments") or 0,
+                "url": hit.get("url") or f"https://news.ycombinator.com/item?id={story_id}",
+                "snippet": "",
+            })
+        posts.sort(key=lambda p: p["score"], reverse=True)
+        posts = posts[:limit]
         print(f"    ✓ Hacker News — {len(posts)} relevant stories")
     except Exception as exc:
         print(f"    ⚠  Hacker News failed: {exc}")
