@@ -25,7 +25,10 @@ import anthropic
 load_dotenv(Path(__file__).parent / ".env")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-OUTPUT_DIR = Path(__file__).parent / "reports"
+PROJECT_DIR = Path(__file__).parent
+OUTPUT_DIR = PROJECT_DIR / "reports"
+PAST_POSTS_FILE = PROJECT_DIR / "past_posts.md"
+POST_IDEAS_FILE = PROJECT_DIR / "post_ideas.md"
 
 REDDIT_SUBREDDITS = [
     "gamedev",
@@ -46,6 +49,8 @@ HTTP_HEADERS = {
     "Accept": "application/atom+xml,application/rss+xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+REDDIT_REQUEST_DELAY = float(os.getenv("REDDIT_REQUEST_DELAY", "3"))
+REDDIT_MAX_RETRIES = int(os.getenv("REDDIT_MAX_RETRIES", "6"))
 
 HN_KEYWORDS = [
     "game", "gaming", "dev", "developer", "programming", "software",
@@ -60,44 +65,75 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text).strip()[:300]
 
 
+def _fetch_reddit_rss(session: requests.Session, url: str) -> feedparser.FeedParserDict | None:
+    """Fetch a Reddit RSS feed with retries for 429 rate limits."""
+    for attempt in range(REDDIT_MAX_RETRIES):
+        try:
+            resp = session.get(url, timeout=15)
+        except requests.RequestException:
+            if attempt < REDDIT_MAX_RETRIES - 1:
+                time.sleep(2 + attempt * 2)
+            continue
+
+        if resp.status_code == 200:
+            feed = feedparser.parse(resp.content)
+            if feed.entries:
+                return feed
+            return None
+
+        if resp.status_code == 429 and attempt < REDDIT_MAX_RETRIES - 1:
+            wait = int(resp.headers.get("Retry-After", 5 + attempt * 5))
+            time.sleep(wait)
+            continue
+
+        break
+    return None
+
+
 def fetch_reddit_posts(subreddits: list[str], limit: int = 20) -> list[dict]:
     """Fetch top posts from the past week via Reddit RSS (JSON endpoints often 403)."""
     posts = []
-    for sub in subreddits:
+    session = requests.Session()
+    session.headers.update(HTTP_HEADERS)
+
+    for i, sub in enumerate(subreddits):
+        if i > 0:
+            time.sleep(REDDIT_REQUEST_DELAY)
+
         rss_urls = [
-            f"https://www.reddit.com/r/{sub}/top/.rss?t=week&limit={limit}",
             f"https://old.reddit.com/r/{sub}/top/.rss?t=week&limit={limit}",
+            f"https://www.reddit.com/r/{sub}/top/.rss?t=week&limit={limit}",
+            f"https://old.reddit.com/r/{sub}/hot/.rss?limit={limit}",
         ]
         fetched = False
         for url in rss_urls:
-            try:
-                feed = feedparser.parse(url, request_headers=HTTP_HEADERS)
-                if getattr(feed, "status", None) == 403 or not feed.entries:
-                    continue
-                entries = feed.entries[:limit]
-                for i, entry in enumerate(entries):
-                    rank = limit - i
-                    snippet = ""
-                    if entry.get("content"):
-                        snippet = _strip_html(entry.content[0].get("value", ""))
-                    elif entry.get("summary"):
-                        snippet = _strip_html(entry.summary)
-                    posts.append({
-                        "source": f"r/{sub}",
-                        "title": entry.get("title", ""),
-                        "score": rank * 100,
-                        "comments": 0,
-                        "url": entry.get("link", ""),
-                        "snippet": snippet,
-                    })
-                print(f"    ✓ r/{sub} — {len(entries)} posts (RSS)")
-                fetched = True
-                break
-            except Exception:
+            feed = _fetch_reddit_rss(session, url)
+            if not feed:
                 continue
+
+            entries = feed.entries[:limit]
+            for i, entry in enumerate(entries):
+                rank = limit - i
+                snippet = ""
+                if entry.get("content"):
+                    snippet = _strip_html(entry.content[0].get("value", ""))
+                elif entry.get("summary"):
+                    snippet = _strip_html(entry.summary)
+                posts.append({
+                    "source": f"r/{sub}",
+                    "title": entry.get("title", ""),
+                    "score": rank * 100,
+                    "comments": 0,
+                    "url": entry.get("link", ""),
+                    "snippet": snippet,
+                })
+            feed_type = "top/week" if "top" in url else "hot"
+            print(f"    ✓ r/{sub} — {len(entries)} posts (RSS {feed_type})")
+            fetched = True
+            break
+
         if not fetched:
-            print(f"    ⚠  r/{sub} failed: Reddit RSS blocked or unavailable")
-        time.sleep(0.5)
+            print(f"    ⚠  r/{sub} failed: Reddit rate-limited or unavailable")
     return posts
 
 
@@ -164,9 +200,24 @@ def rank_content(all_posts: list[dict], top_n: int = 15) -> list[dict]:
     return ranked[:top_n]
 
 
+# ── Context files ─────────────────────────────────────────────────────────────
+
+def load_context_file(path: Path) -> str | None:
+    """Load a markdown context file if it exists and has content."""
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    return text or None
+
+
 # ── AI Drafting ───────────────────────────────────────────────────────────
 
-def generate_drafts(top_content: list[dict], api_key: str) -> dict:
+def generate_drafts(
+    top_content: list[dict],
+    api_key: str,
+    past_posts: str | None = None,
+    post_ideas: str | None = None,
+) -> dict:
     """Use Claude to generate 3 LinkedIn post drafts."""
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -176,41 +227,85 @@ def generate_drafts(top_content: list[dict], api_key: str) -> dict:
         for p in top_content[:12]
     )
 
-    prompt = f"""You are helping a video game developer and programmer from West Yorkshire, UK, 
-write weekly LinkedIn posts to stay visible in their professional network — especially important 
+    past_posts_section = ""
+    if past_posts:
+        past_posts_section = f"""
+PAST POSTS AND PERFORMANCE (your voice + what actually worked):
+Study these carefully. Match this author's voice — reflective, specific, dry wit, Northern UK sensibility.
+Prioritise patterns from high-performing posts. Avoid repeating topics already posted recently.
+
+{past_posts}
+"""
+
+    post_ideas_section = ""
+    if post_ideas:
+        post_ideas_section = f"""
+PERSONAL POST IDEAS (optional — use only if they fit this week's mood):
+These are ideas the author noted during the week. Use one ONLY if it naturally connects to a
+trending topic or the current industry conversation. Otherwise save it for a future week.
+Do not force a personal idea into a draft that does not fit.
+
+{post_ideas}
+"""
+
+    prompt = f"""You are helping a video game developer and programmer from West Yorkshire, UK,
+write weekly LinkedIn posts to stay visible in their professional network — especially important
 during the current wave of games industry layoffs.
+
+PRIMARY GOAL: Maximize LinkedIn engagement (impressions, comments, saves). Every draft should be
+written with that goal in mind, informed by the performance data in past posts.
 
 Here are the most engaging topics in the game dev and programming community this week:
 
 {content_summary}
+{past_posts_section}{post_ideas_section}
+Based on trending topics, past performance, and optional personal ideas, write exactly {NUM_DRAFTS}
+distinct LinkedIn post drafts.
 
-Based on these trending topics, write exactly {NUM_DRAFTS} distinct LinkedIn post drafts.
+ENGAGEMENT LESSONS (from past post analytics — apply these):
+- The best-performing post used a vivid metaphor, a specific real-world detail (named game, code,
+  or artifact), dark humour, and a provocative closing question that invited debate.
+- Posts that performed poorly tended to be either too generic, too niche without a hook, or ended
+  with questions nobody felt compelled to answer.
+- Aim for the energy and specificity of the top performer, not the safe corporate tone of the weaker ones.
 
-Each draft MUST:
-- Be casual, fun, and light-hearted — genuine personality, a dry wit, maybe a touch of Northern humour
-- Be short and punchy — strictly 3 to 5 sentences, no more
-- Feel like a real human wrote it, not a PR department or a robot
-- Be about game development, programming, or the career side of the industry
-- End with a question or soft call-to-action to invite comments
-- Have a different opening style to the others — vary hooks (question, bold statement, story, observation)
-- Be ready to copy-paste and post with only light personal tweaks needed
+VOICE AND STYLE (match the past posts, not generic LinkedIn advice):
+- Reflective and genuine — a real person thinking out loud, not a PR department
+- Dry wit, occasional dark humour, touch of Northern sensibility
+- Use concrete specifics: named games, tools, events, code snippets, or industry moments
+- Length: roughly 4–8 short paragraphs or equivalent — long enough to develop a thought, not a tweet
+- End with ONE strong question or call-to-action that people will actually want to answer
+- Vary opening hooks across the 3 drafts (metaphor, bold statement, personal story, observation)
 
-Make the 3 drafts noticeably different in angle and format from each other.
+DRAFT MIX:
+- At least 2 drafts should anchor on this week's trending topics
+- At most 1 draft may draw from a personal idea — only if it genuinely fits the week's mood
+- All 3 drafts must feel distinct in angle and format
 
 Return your response as valid JSON only — no markdown, no extra text — using this exact structure:
 {{
   "drafts": [
     {{
-      "title": "Short descriptive label for this draft (e.g. 'The Hot Take')",
-      "inspiration": "One sentence: which trending topic inspired this and why",
+      "title": "Short descriptive label for this draft (e.g. 'The Archaeology Angle')",
+      "inspiration": "One sentence: what inspired this and why it should perform well",
+      "personal_idea_used": null,
       "post": "The actual LinkedIn post text, ready to copy"
     }}
+  ],
+  "ideas_saved_for_later": [
+    {{
+      "idea": "The personal idea that was not used",
+      "reason": "Brief reason it did not fit this week"
+    }}
   ]
-}}"""
+}}
+
+Set personal_idea_used to the idea title/string if a personal idea was used, otherwise null.
+If all personal ideas were used or none were provided, ideas_saved_for_later can be an empty array."""
 
     message = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=2048,
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
     text = message.content[0].text.strip()
@@ -265,13 +360,18 @@ def render_html_report(top_content: list[dict], drafts_data: dict, run_date: dat
         icon = draft_icons[i % len(draft_icons)]
         post_text = draft["post"].replace("\n", "<br>")
         post_escaped = draft["post"].replace("`", "\\`").replace("\\", "\\\\")
+        idea_badge = ""
+        if draft.get("personal_idea_used"):
+            idea_badge = (
+                f'<span class="idea-badge">💡 {draft["personal_idea_used"]}</span>'
+            )
         drafts_html += f"""
         <div class="draft-card" style="--accent:{colour}">
             <div class="draft-header">
                 <div class="draft-icon">{icon}</div>
                 <div>
                     <h3 class="draft-title">{draft['title']}</h3>
-                    <p class="draft-inspiration">💭 {draft['inspiration']}</p>
+                    <p class="draft-inspiration">💭 {draft['inspiration']}{idea_badge}</p>
                 </div>
                 <button class="copy-btn" onclick="copyDraft(this, `{post_escaped}`)" title="Copy to clipboard">
                     📋 Copy
@@ -279,6 +379,25 @@ def render_html_report(top_content: list[dict], drafts_data: dict, run_date: dat
             </div>
             <div class="draft-post">{post_text}</div>
         </div>"""
+
+    deferred_ideas = drafts_data.get("ideas_saved_for_later") or []
+    deferred_html = ""
+    if deferred_ideas:
+        items = "".join(
+            f'<li><strong>{item.get("idea", "")}</strong> — {item.get("reason", "")}</li>'
+            for item in deferred_ideas
+        )
+        deferred_html = f"""
+    <div class="section">
+        <div class="section-heading">
+            <h2>📌 Ideas Saved for Later</h2>
+            <div class="section-line"></div>
+        </div>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">
+            Personal ideas that did not fit this week's conversation — keep these in post_ideas.md for next time.
+        </p>
+        <ul class="deferred-list">{items}</ul>
+    </div>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -507,6 +626,36 @@ def render_html_report(top_content: list[dict], drafts_data: dict, run_date: dat
             font-style: italic;
             line-height: 1.5;
         }}
+        .idea-badge {{
+            display: inline-block;
+            margin-left: 8px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-style: normal;
+            font-size: 11px;
+            background: rgba(245,158,11,0.12);
+            color: #fbbf24;
+            border: 1px solid rgba(245,158,11,0.25);
+        }}
+        .deferred-list {{
+            list-style: none;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }}
+        .deferred-list li {{
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--muted);
+        }}
+        .deferred-list strong {{
+            color: var(--text);
+        }}
         .copy-btn {{
             margin-left: auto;
             flex-shrink: 0;
@@ -619,7 +768,7 @@ def render_html_report(top_content: list[dict], drafts_data: dict, run_date: dat
             {drafts_html}
         </div>
     </div>
-
+{deferred_html}
 </div>
 
 <div class="footer">
@@ -696,10 +845,25 @@ def main():
     print(f"  🏆  Top {len(top_content)} ranked by engagement score")
 
     # ── Draft ──
+    past_posts = load_context_file(PAST_POSTS_FILE)
+    post_ideas = load_context_file(POST_IDEAS_FILE)
+
+    print()
+    if past_posts:
+        print("  📈  Loaded past_posts.md (voice + analytics)")
+    else:
+        print("  ℹ️   No past_posts.md found — drafts won't reference your history")
+    if post_ideas:
+        print("  💡  Loaded post_ideas.md (optional personal ideas)")
+    else:
+        print("  ℹ️   No post_ideas.md found")
+
     print()
     print(f"  ✍️   Generating drafts with {CLAUDE_MODEL}...")
     try:
-        drafts_data = generate_drafts(top_content, api_key)
+        drafts_data = generate_drafts(
+            top_content, api_key, past_posts=past_posts, post_ideas=post_ideas
+        )
         num_drafts = len(drafts_data.get("drafts", []))
         print(f"  ✓   {num_drafts} draft posts generated")
     except json.JSONDecodeError as exc:
