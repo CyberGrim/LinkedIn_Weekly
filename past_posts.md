@@ -96,6 +96,15 @@ So here's what I'm genuinely curious about: what’s your process of integrating
 ```
 ### Analytics
 ```
+3304 Impressions
+2327 Members reached
+13 Profile viewers from this post
+1 Followers gained from this post
+31 Social engagements
+14 Reactions
+14 Comments
+0 Reposts
+3 Saves
 ```
 
 ## Week 5
