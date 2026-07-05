@@ -110,6 +110,29 @@ So here's what I'm genuinely curious about: what’s your process of integrating
 ## Week 5
 ### Post
 ```
+Every post about AI coding lately is about how fast a model can spit out 200 lines. Almost none of them ask who's going to make sure those 200 lines actually work.
+
+There’s an undervalued group of people at every video game studio who are perfectly placed to step into that role.
+
+QA Engineers
+
+I’ve worked with QA Engineers who could look at a list of commits, what files changed, what LINES changed, and immediately be able to see which areas of the game need to be focussed on, what’s going to break, and HOW it can break.
+
+I was one of the QA Engineers, and I prided myself on it. When I write code, I spend easily 10 times longer testing it, making sure edge cases are covered, making sure the code is as tight as it can be, making sure it can be integrated, and reviewed, with as little friction as possible.
+
+I’ve always done this, but it’s even more important in the world of AI code generation.
+
+So why are these unsung heroes first out the door when times get tough? They have exactly the skillset this era needs. They should be trained up, not laid off.
+
+The instinct of a QA Engineer isn’t just “does this run”, it’s “why does this work, and where will it stop working”. It’s an instinct to test edge cases, question assumptions, and trace a bug back to its root cause. Most importantly, it’s an instinct that isn’t lost through the move from testing code to writing it.
+
+A lot of companies are reading this moment backwards. QA is too often treated as cost-centre support staff. First in line for layoffs, chronically underpaid relative to development, and framed as a gate to pass through in the process of development rather than an integral part of it. The skill AI can't replace is the one QA has been quietly building for years, and companies cutting that capability instead of investing in it are trading a long-term advantage for a short-term line item.
+
+The engineers who can read AI output critically, catch what it missed, and understand the 'why' behind a design choice are going to be more valuable than the ones who can just prompt code into existence.
+
+The QA instinct is going to be the differentiator between good engineers and great ones.
+
+If you're in QA and wondering whether you have what it takes in this brave new world we find ourselves in, you always did.
 ```
 ### Analytics
 ```
