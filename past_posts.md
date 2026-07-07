@@ -136,4 +136,14 @@ If you're in QA and wondering whether you have what it takes in this brave new w
 ```
 ### Analytics
 ```
+Note: This was posted on Sunday, and these analytics are from Tuesday. The day after this post was massive Xbox layoffs affectings 3,600 people.
+304 Impressions
+194 Members reached
+2 Profile viewers from this post
+0 Followers gained from this post
+7 Social engagements
+4 Reactions
+3 Comments
+0 Reposts
+0 Saves
 ```
