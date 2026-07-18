@@ -147,3 +147,33 @@ Note: This was posted on Sunday, and these analytics are from Tuesday. The day a
 0 Reposts
 0 Saves
 ```
+
+## Week 6
+### Post
+```
+3,200 people. Plus many others scattered across projects nobody will ever know about. I find it hard to even visualise that number. Layoffs never feel like a bed of roses, but this one hits different.
+
+I keep seeing the same pattern in the posts and comments: shock that it happened, anger that it happened this way, and a kind of numb recognition that it's just... normal now. That's the part that gets me, that it just feels… routine.
+
+Here's what I've noticed, though. The engineers and artists and designers being let go right now? A lot of them are some of the most talented people I've ever worked with. People who shipped games that defined genres. People who solved problems I didn't even know could be solved. They're all facing a job market that's simultaneously flooded with amazing talent and terrified of hiring anyone.
+
+So here's my ask: to anyone reading this who's hiring, or knows someone who is, now's the time to actually back that up.
+
+I don't have an actionable fix for this - I don’t think any of us actually making the games do - I’m not going to pretend a LinkedIn post changes anything structural about the industry's approach to headcount and annual earnings. But I do know this: if you're someone who just got caught in this latest bout, your experience and your skill are real. The people who built those games know it. The community knows it. And there are studios out there — maybe smaller, maybe scrappier, maybe actually stable — that would be lucky to have you.
+
+And if you're still in a job right now: check in on the people you've worked with. Don't wait for them to reach out. They're probably exhausted from doing that already.
+
+How are you lot holding up? Genuinely. My DMs are always open.
+```
+### Analytics
+```
+1354 Impressions
+908 Members reached
+5 Profile viewers from this post
+0 Followers gained from this post
+4 Social engagements
+3 Reactions
+1 Comments
+0 Reposts
+0 Saves
+```
